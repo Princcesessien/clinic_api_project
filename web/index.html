@@ -1,0 +1,135 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Clinic Appointments</title>
+<style>
+  body{font-family:system-ui,sans-serif;max-width:720px;margin:0 auto;padding:24px;color:#222}
+  .slot{display:flex;justify-content:space-between;align-items:center;border:1px solid #ddd;border-radius:8px;padding:12px;margin:8px 0}
+  .slot.booked{opacity:.5}
+  button{padding:8px 14px;border:0;border-radius:6px;background:#0a7a5a;color:#fff;cursor:pointer}
+  button:disabled{background:#999;cursor:not-allowed}
+  button.grey{background:#777}
+  input{display:block;width:100%;padding:8px;margin:6px 0 12px;box-sizing:border-box}
+  #form,#confirmation{border:1px solid #ddd;border-radius:8px;padding:16px;margin:16px 0}
+  .error{color:#b00020}
+  .hidden{display:none}
+</style>
+</head>
+<body>
+<h1>Book an appointment</h1>
+<div id="slots">Loading slots…</div>
+
+<div id="form" class="hidden">
+  <h2>Your details</h2>
+  <p id="chosen"></p>
+  <label>Name<input id="name" autocomplete="name"></label>
+  <label>Email<input id="email" type="email" autocomplete="email"></label>
+  <button id="submit">Confirm booking</button>
+  <button id="back" class="grey" type="button">Back</button>
+  <p id="message" class="error"></p>
+</div>
+
+<div id="confirmation" class="hidden"></div>
+
+<script>
+const API_BASE = "http://127.0.0.1:8000";
+const API_KEY = "90-EIO6LCtQijqJXyzAojWHdh4zfFxpxszBUekEc-e4";
+
+let selected = null;
+let idemKey = null;
+const $ = (id) => document.getElementById(id);
+
+async function api(path, options = {}) {
+  const res = await fetch(API_BASE + path, {
+    ...options,
+    headers: { "X-API-Key": API_KEY, "Content-Type": "application/json", ...(options.headers || {}) },
+  });
+  const data = await res.json().catch(() => ({}));
+  return { res, data };
+}
+
+const fmt = (iso) => new Date(iso).toLocaleString([], { dateStyle: "medium", timeStyle: "short" });
+
+async function loadSlots() {
+  const box = $("slots");
+  try {
+    const { res, data } = await api("/slots");
+    if (!res.ok) { box.textContent = data.error || "Could not load slots."; return; }
+    box.innerHTML = "";
+    const upcoming = data.slots.filter((s) => new Date(s.start) > new Date());
+    if (!upcoming.length) { box.textContent = "No upcoming slots."; return; }
+    upcoming.forEach((s) => {
+      const row = document.createElement("div");
+      row.className = "slot" + (s.available ? "" : " booked");
+      const info = document.createElement("span");
+      info.textContent = `${s.provider} — ${fmt(s.start)}`;
+      const btn = document.createElement("button");
+      btn.textContent = s.available ? "Book" : "Taken";
+      btn.disabled = !s.available;
+      btn.onclick = () => choose(s);
+      row.append(info, btn);
+      box.append(row);
+    });
+  } catch (e) {
+    box.textContent = "Could not reach the server. Please try again.";
+  }
+}
+
+function choose(s) {
+  selected = s;
+  idemKey = crypto.randomUUID();
+  $("chosen").textContent = `${s.provider} — ${fmt(s.start)}`;
+  $("message").textContent = "";
+  $("form").classList.remove("hidden");
+  $("confirmation").classList.add("hidden");
+}
+
+$("back").onclick = () => $("form").classList.add("hidden");
+
+$("submit").onclick = async () => {
+  const btn = $("submit"), msg = $("message");
+  msg.textContent = "";
+  btn.disabled = true;
+  try {
+    const { res, data } = await api("/bookings", {
+      method: "POST",
+      headers: { "Idempotency-Key": idemKey },
+      body: JSON.stringify({ slot_id: selected.id, name: $("name").value, email: $("email").value }),
+    });
+    if (res.status === 201) {
+      const found = await api(`/bookings/${data.id}`);
+      showConfirmation(found.res.ok ? found.data : data);
+      $("form").classList.add("hidden");
+      loadSlots();
+      return;
+    }
+    idemKey = crypto.randomUUID(); // new attempt after an error needs a new key
+    if (res.status === 409) { msg.textContent = "Sorry, that slot was just taken. Please pick another."; loadSlots(); }
+    else if (res.status === 429) { msg.textContent = `Too many attempts. Try again in ${res.headers.get("Retry-After") || "a few"} seconds.`; }
+    else { msg.textContent = data.error || "Something went wrong."; }
+  } catch (e) {
+    msg.textContent = "Network problem. Press Confirm again to retry safely.";
+  } finally {
+    btn.disabled = false;
+  }
+};
+
+function showConfirmation(b) {
+  const box = $("confirmation");
+  box.innerHTML = "";
+  const h = document.createElement("h2");
+  h.textContent = "Booking " + b.status;
+  const p = document.createElement("p");
+  p.textContent = `Booking ID: ${b.id}`;
+  const q = document.createElement("p");
+  q.textContent = `${b.name} (${b.email}) — slot ${b.slot_id}`;
+  box.append(h, p, q);
+  box.classList.remove("hidden");
+}
+
+loadSlots();
+</script>
+</body>
+</html>

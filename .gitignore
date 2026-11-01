@@ -1,0 +1,13 @@
+# Secrets
+.env
+
+# Python
+venv/
+__pycache__/
+*.pyc
+
+# Local database (you use Neon)
+db.sqlite3
+
+# Editor
+.vscode/
